@@ -43,6 +43,26 @@ func (s *Cluster) AddJobs(req *host.AddJobsReq, res *host.AddJobsRes) error {
 	return nil
 }
 
+func (s *Cluster) StreamHosts(req struct{}, stream rpcplus.Stream) (err error) {
+	hosts := make(chan *host.Host)
+	s.state.AddListener(hosts)
+	defer s.state.RemoveListener(hosts)
+outer:
+	for {
+		select {
+		case h := <-hosts:
+			select {
+			case stream.Send <- h:
+			case err = <-stream.Error:
+				break outer
+			}
+		case err = <-stream.Error:
+			break outer
+		}
+	}
+	return nil
+}
+
 // Host Service methods
 
 func (s *Cluster) ConnectHost(hostID *string, h *host.Host, stream rpcplus.Stream) error {

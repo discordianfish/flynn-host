@@ -18,11 +18,18 @@ type State struct {
 
 	deleted      map[string]struct{}
 	nextModified bool
+
+	listenersMtx sync.RWMutex
+	listeners    map[chan *host.Host]struct{}
 }
 
 func NewState() *State {
 	curr := make(map[string]host.Host)
-	return &State{curr: &curr, streams: make(map[string]chan<- *host.Job)}
+	return &State{
+		curr:      &curr,
+		streams:   make(map[string]chan<- *host.Job),
+		listeners: make(map[chan *host.Host]struct{}),
+	}
 }
 
 func (s *State) Begin() {
@@ -119,10 +126,11 @@ func (s *State) HostExists(id string) bool {
 	return exists
 }
 
-func (s *State) AddHost(host *host.Host, ch chan<- *host.Job) {
-	(*s.next)[host.ID] = *host
-	s.streams[host.ID] = ch
+func (s *State) AddHost(h *host.Host, ch chan<- *host.Job) {
+	(*s.next)[h.ID] = *h
+	s.streams[h.ID] = ch
 	s.nextModified = true
+	go s.notifyListeners(*h)
 }
 
 func (s *State) RemoveHost(id string) {
@@ -130,4 +138,25 @@ func (s *State) RemoveHost(id string) {
 	s.deleted[id] = struct{}{}
 	delete(s.streams, id)
 	s.nextModified = true
+}
+
+func (s *State) notifyListeners(h host.Host) {
+	h.Jobs = nil
+	s.listenersMtx.RLock()
+	defer s.listenersMtx.RUnlock()
+	for ch := range s.listeners {
+		ch <- &h
+	}
+}
+
+func (s *State) AddListener(ch chan *host.Host) {
+	s.listenersMtx.Lock()
+	s.listeners[ch] = struct{}{}
+	s.listenersMtx.Unlock()
+}
+
+func (s *State) RemoveListener(ch chan *host.Host) {
+	s.listenersMtx.Lock()
+	delete(s.listeners, ch)
+	s.listenersMtx.Unlock()
 }
